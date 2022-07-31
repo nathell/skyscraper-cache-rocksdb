@@ -2,6 +2,7 @@
   (:require [skyscraper.cache :as cache]
             [taoensso.nippy :as nippy])
   (:import [skyscraper.cache CacheBackend]
+           [java.io Closeable]
            [org.rocksdb CompressionType Options RocksDB]))
 
 (defn- db-keys [key]
@@ -21,7 +22,13 @@
           blob (.get db (nippy/freeze blob-key))]
       (when (and meta blob)
         {:meta (nippy/thaw meta)
-         :blob blob}))))
+         :blob blob})))
+  Closeable
+  (close [cache]
+    (.cancelAllBackgroundWork db true)
+    (.syncWal db)
+    (.close db)
+    nil))
 
 (defn rocks-db-cache [dir]
   (let [opts (doto (Options.)
