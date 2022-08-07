@@ -1,28 +1,49 @@
 (ns skyscraper.cache.rocksdb
-  (:require [skyscraper.cache :as cache]
+  (:require [clojure.string :as string]
+            [skyscraper.cache :as cache]
             [taoensso.nippy :as nippy])
-  (:import [skyscraper.cache CacheBackend]
-           [java.io Closeable]
-           [org.rocksdb CompressionType Options RocksDB]))
+  (:import [clojure.lang Seqable]
+           [java.io
+            ByteArrayInputStream ByteArrayOutputStream Closeable
+            DataInputStream DataOutputStream]
+           [org.rocksdb CompressionType Options RocksDB RocksIterator]
+           [skyscraper.cache CacheBackend]))
 
-(defn- db-keys [key]
-  {:meta-key (str "meta/" key)
-   :blob-key (str "blobs/" key)})
+(defn- read-value [^bytes content]
+  (let [bais (ByteArrayInputStream. content)
+        dis (DataInputStream. bais)
+        metadata (nippy/thaw-from-in! dis)
+        blob (nippy/thaw-from-in! dis)]
+    {:meta metadata, :blob blob}))
+
+(defn- kv-seq [^RocksIterator iter]
+  (lazy-seq
+   (when (.isValid iter)
+     (let [k (.key iter)
+           v (.value iter)]
+       (.next iter)
+       (cons (assoc (read-value v) :key (String. k "UTF-8"))
+             (kv-seq iter))))))
 
 (deftype RocksDBCache
     [db]
   CacheBackend
   (save-blob [cache key blob metadata]
-    (let [{:keys [meta-key blob-key]} (db-keys key)]
-      (.put db (nippy/freeze meta-key) (nippy/freeze metadata))
-      (.put db (nippy/freeze blob-key) blob)))
+    (let [keyb (.getBytes key "UTF-8")
+          baos (ByteArrayOutputStream.)
+          dos (DataOutputStream. baos)
+          metadata (into {} metadata)]
+      (nippy/freeze-to-out! dos metadata)
+      (nippy/freeze-to-out! dos blob)
+      (.put db keyb (.toByteArray baos))))
   (load-blob [cache key]
-    (let [{:keys [meta-key blob-key]} (db-keys key)
-          meta (.get db (nippy/freeze meta-key))
-          blob (.get db (nippy/freeze blob-key))]
-      (when (and meta blob)
-        {:meta (nippy/thaw meta)
-         :blob blob})))
+    (when-let [content (.get db (.getBytes key "UTF-8"))]
+      (read-value content)))
+  Seqable
+  (seq [cache]
+    (let [iter (.newIterator db)]
+      (.seekToFirst iter)
+      (kv-seq iter)))
   Closeable
   (close [cache]
     (.cancelAllBackgroundWork db true)
