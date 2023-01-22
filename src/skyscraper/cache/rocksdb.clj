@@ -58,3 +58,7 @@
                (.setBottommostCompressionType CompressionType/ZSTD_COMPRESSION))
         db (RocksDB/open opts dir)]
     (RocksDBCache. db)))
+
+(defn delete [^RocksDBCache cache ^String key]
+  (let [keyb (.getBytes key "UTF-8")]
+    (.delete (.db cache) keyb)))
